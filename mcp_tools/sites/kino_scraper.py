@@ -1,15 +1,23 @@
 """
-Scraper for https://kino.kz — cinema showtimes in Almaty.
+Scraper for https://kino.kz — movies, concerts, art events in Almaty.
 
-kino.kz has a different structure: movies with multiple showtimes per day.
-We flatten each showtime into a separate Event so the agent gets clean entries.
+Real HTML structure (verified 2026-03-12):
+  The site covers movies AND live events (concerts, stand-up, art, entertainment).
 
-HOW TO UPDATE SELECTORS:
-1. Open https://kino.kz/almaty in Chrome
-2. Right-click a movie block → Inspect
-3. Find CSS selectors and update below
+  Event card: <a href="/ru/concert/event/XXXX"> or /ru/art/event/ /ru/entertainment/event/
+  Title:      h4 inside the card
+  Date+venue: p inside the card — "16 марта • Punch Stand-Up Club"
+  Price:      span.rt-Badge (first one inside card) — "от 2 000 ₸"
+
+  Movie card: <a href="/ru/cinema/...">
+  Title:      h4 inside
+  Date:       p inside
+
+  We use href pattern as the stable selector since class names are CSS Modules hashes
+  that may change on re-deploy.
 """
 
+import re
 import logging
 from typing import List
 from playwright.async_api import Page
@@ -18,83 +26,96 @@ from ..event_models import Event
 
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------
-URL = "https://kino.kz/almaty"
+BASE_URL = "https://kino.kz"
+URL      = "https://kino.kz/ru"
 
-SELECTORS = {
-    "movie_card":  ".movie, .movie-card, .film-item, article.film",
-    "title":       ".movie__title, .film-title, h2, h3",
-    "cinema":      ".cinema-name, .movie__cinema, .session__cinema",
-    "showtime":    ".showtime, .session-time, .time-slot",
-    "link":        "a",
+# URL patterns for each event type
+EVENT_PATTERNS = {
+    "concert":      "/ru/concert/event/",
+    "art":          "/ru/art/event/",
+    "entertainment":"/ru/entertainment/event/",
+    "movie":        "/ru/cinema/",
 }
-# -------------------------------------------------------------------
 
 
 class KinoScraper(BaseScraper):
     source_name = "kino"
-    base_url = "https://kino.kz"
+    base_url = BASE_URL
 
     async def scrape(self, page: Page, city: str = "Almaty") -> List[Event]:
         events: List[Event] = []
-
         try:
             logger.info(f"[kino] Navigating to {URL}")
             await page.goto(URL, wait_until="domcontentloaded")
-            await page.wait_for_timeout(2_000)
-            await page.wait_for_selector(SELECTORS["movie_card"], timeout=15_000)
+            await page.wait_for_timeout(4_000)  # wait for React render
 
-            movies = await page.query_selector_all(SELECTORS["movie_card"])
-            logger.info(f"[kino] Found {len(movies)} movie blocks")
+            # Find all event/movie card links using stable href patterns
+            for category, path_prefix in EVENT_PATTERNS.items():
+                selector = f'a[href^="{path_prefix}"]'
+                cards = await page.query_selector_all(selector)
+                logger.info(f"[kino] {category}: {len(cards)} cards")
 
-            for movie in movies:
-                try:
-                    title_el  = await movie.query_selector(SELECTORS["title"])
-                    link_el   = await movie.query_selector(SELECTORS["link"])
-                    cinema_el = await movie.query_selector(SELECTORS["cinema"])
+                for card in cards:
+                    try:
+                        href  = await card.get_attribute("href") or ""
+                        url   = f"{BASE_URL}{href}"
 
-                    title = self._safe_text(
-                        await title_el.inner_text() if title_el else None
-                    )
-                    if not title:
-                        continue
+                        title_el  = await card.query_selector("h4")
+                        detail_el = await card.query_selector("p")
+                        price_el  = await card.query_selector("span.rt-Badge")
 
-                    href = await link_el.get_attribute("href") if link_el else None
-                    url  = f"{self.base_url}{href}" if href and href.startswith("/") else href
-                    cinema = self._safe_text(
-                        await cinema_el.inner_text() if cinema_el else None
-                    )
+                        title = self._safe_text(
+                            await title_el.inner_text() if title_el else None
+                        )
+                        if not title:
+                            continue
 
-                    # Each movie may have multiple showtimes — create one Event per time
-                    showtime_els = await movie.query_selector_all(SELECTORS["showtime"])
+                        detail = self._safe_text(
+                            await detail_el.inner_text() if detail_el else None
+                        )
+                        price = self._safe_text(
+                            await price_el.inner_text() if price_el else None
+                        )
 
-                    if showtime_els:
-                        for st_el in showtime_els:
-                            time_raw = self._safe_text(await st_el.inner_text())
-                            events.append(Event(
-                                title=title,
-                                time=time_raw,
-                                location=cinema,
-                                url=url,
-                                source=self.source_name,
-                                category="movie",
-                            ))
-                    else:
-                        # No showtimes found — still include the movie
+                        # detail format: "16 марта • Punch Stand-Up Club"
+                        date, location = self._parse_detail(detail)
+
                         events.append(Event(
                             title=title,
-                            location=cinema,
+                            date=date,
+                            location=location,
+                            price=price,
                             url=url,
                             source=self.source_name,
-                            category="movie",
+                            category=category,
                         ))
 
-                except Exception as e:
-                    logger.warning(f"[kino] Failed to parse movie: {e}")
-                    continue
+                    except Exception as e:
+                        logger.warning(f"[kino] Card parse error ({category}): {e}")
+                        continue
 
         except Exception as e:
             logger.error(f"[kino] Scraper failed: {e}")
 
-        logger.info(f"[kino] Returning {len(events)} events")
-        return events
+        # Deduplicate by URL
+        seen = set()
+        unique = []
+        for e in events:
+            if e.url not in seen:
+                seen.add(e.url)
+                unique.append(e)
+
+        logger.info(f"[kino] Returning {len(unique)} events")
+        return unique
+
+    def _parse_detail(self, detail: str | None):
+        """
+        Parse: "16 марта • Punch Stand-Up Club"
+        Returns: (date, location)
+        """
+        if not detail:
+            return None, None
+        parts = detail.split("•", 1)
+        date     = self._safe_text(parts[0]) if len(parts) >= 1 else None
+        location = self._safe_text(parts[1]) if len(parts) == 2 else None
+        return date, location
