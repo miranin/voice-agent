@@ -1,14 +1,14 @@
 # 🎙 Voice AI Event Assistant — Team Guide
 
-This repository contains a **team project (4 members)** to build a **Voice AI Assistant** that helps users find events in **Almaty**.
+This repository contains a **team project (3-4 members)** to build a **Voice AI Assistant** that helps users find events in **Almaty**.
 
-The assistant will listen to a user's voice, search event websites, and respond with voice.
+The assistant listens to the user's voice, searches event websites using MCP Playwright, and responds with voice.
 
 **Example interaction:**
 
-> User: "Куда можно сходить сегодня вечером в Алматы?"
+> User: "Привет! Куда можно сходить сегодня вечером в Алматы? Желательно на концерт или стендап."
 >
-> Assistant: "Сегодня есть стендап в 19:00 и джаз концерт в 20:00."
+> Assistant: "Сегодня вечером есть классный стендап на Абая в 19:00 и джазовый концерт в 20:00. Куда бы ты хотел?"
 
 ---
 
@@ -43,13 +43,11 @@ Each team member is responsible for **one module**.
 | Frontend Engineer | Voice UI |
 | Backend Engineer | API + pipeline |
 | AI Engineer | LangChain Agent |
-| Automation Engineer | Playwright scraping |
+| Automation Engineer | MCP Playwright scraping |
 
 ---
 
 ## 📁 Project Structure
-
-After cloning, the project should look like this:
 
 ```
 voice-agent/
@@ -78,7 +76,7 @@ cd voice-agent
 python -m venv venv
 ```
 
-Activate environment:
+Activate:
 
 **Mac / Linux:**
 ```bash
@@ -95,20 +93,26 @@ venv\Scripts\activate
 ## 🔧 Step 3 — Install Dependencies
 
 ```bash
-pip install fastapi uvicorn openai langchain playwright faster-whisper elevenlabs
+pip install fastapi uvicorn openai langchain faster-whisper elevenlabs playwright python-dotenv
+```
+
+Install ElevenLabs SDK separately (latest version):
+
+```bash
+pip install elevenlabs
 ```
 
 Install Playwright browser:
 
 ```bash
-playwright install
+playwright install chromium
 ```
 
 ---
 
 ## 🔑 Step 4 — Setup API Keys
 
-Create a file called `.env` and add:
+Create a `.env` file in the root:
 
 ```env
 OPENAI_API_KEY=your_key_here
@@ -119,32 +123,73 @@ ELEVENLABS_API_KEY=your_key_here
 
 ## 🎤 Speech Recognition (ASR)
 
-Possible options:
-- Whisper
-- Faster-Whisper
+### Cloud APIs
 - OpenAI Whisper API
+- Google Speech-to-Text
+- AssemblyAI
 
-**Recommended:** `faster-whisper` (fast and lightweight)
+### Local Models (recommended)
+
+| Model | Notes |
+|-------|-------|
+| [faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small) | Fastest, lowest memory — good starting point |
+| [whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | Best accuracy, optimized speed |
+| [nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | Great performance/speed ratio |
+
+**Recommended for this project:** `faster-whisper-small`
+
+### ASR Hyperparameter Tips (Whisper-based)
+
+- **`beam_size`** — default `5`. Set to `1` (greedy) for faster inference with slight quality tradeoff.
+- **`temperature`** — use `0.0` for best accuracy. If the model hallucinates or loops, try `[0.0, 0.2, 0.4]`.
+- **`condition_on_previous_text`** — set to `False` if the model repeats itself on long audio. Slightly less context but more stable.
 
 ---
 
 ## 🔊 Text to Speech (TTS)
 
-We will use **ElevenLabs API**.
+### Cloud APIs (recommended)
 
-Documentation: https://elevenlabs.io/docs
+- **ElevenLabs API** — best voice quality, supports streaming with minimal latency
+- OpenAI TTS
+
+### ElevenLabs Quick Setup
+
+```python
+from elevenlabs.client import ElevenLabs
+
+client = ElevenLabs(api_key="your_key_here")
+
+audio = client.text_to_speech.convert(
+    voice_id="JBFqnCBsd6RMkjVDRZzb",  # default voice
+    text="Сегодня есть стендап в 19:00.",
+    model_id="eleven_multilingual_v2",
+)
+
+with open("response.mp3", "wb") as f:
+    for chunk in audio:
+        f.write(chunk)
+```
+
+### Local / Open-Source Models
+
+| Model | Notes |
+|-------|-------|
+| [Fish Speech (fishaudio/s2-pro)](https://huggingface.co/fishaudio/s2-pro) | Excellent quality, voice cloning |
+| [XTTS-v2](https://huggingface.co/coqui/XTTS-v2) | Russian + English, voice cloning, streaming |
+| [suno/bark](https://huggingface.co/suno/bark) | Expressive, GPU-heavy |
 
 ---
 
 ## 🌐 Event Websites
 
-The assistant should search events from:
+The agent should search events from:
 
-- https://sxodim.com
+- https://sxodim.com/almaty
 - https://ticketon.kz
 - https://kino.kz
 
-Automation engineer will implement scrapers.
+Automation engineer configures which sites the agent uses based on user queries.
 
 ---
 
@@ -155,13 +200,13 @@ Automation engineer will implement scrapers.
 **Folder:** `frontend/`
 
 **Tasks:**
-- Microphone recording
+- Microphone recording (Web Audio API)
 - Send audio to backend
-- Display transcript
-- Play assistant audio
-- Display chat messages
+- Display transcript in real-time
+- Play assistant audio response
+- Show chat messages and loading animation
 
-**Tech:** React / Next.js, Web Audio API
+**Tech:** React / Vue / Vanilla JS, Web Audio API
 
 ---
 
@@ -172,19 +217,19 @@ Automation engineer will implement scrapers.
 **Tasks:**
 - Create FastAPI server
 - Receive audio from frontend
-- Call ASR service
-- Call AI agent
-- Call TTS service
-- Return response
+- Call ASR service (transcribe audio → text)
+- Call AI agent with transcribed text
+- Call TTS service (response text → audio)
+- Return audio response to frontend
 
 **Example endpoint:** `POST /voice-query`
 
 **Response format:**
 ```json
 {
-  "transcript": "...",
-  "response_text": "...",
-  "audio_url": "..."
+  "transcript": "Куда сходить сегодня вечером?",
+  "response_text": "Сегодня есть стендап в 19:00...",
+  "audio_url": "/audio/response.mp3"
 }
 ```
 
@@ -196,13 +241,14 @@ Automation engineer will implement scrapers.
 
 **Tasks:**
 - Build LangChain agent
-- Write system prompt
-- Process user requests
-- Call automation tools when needed
+- Write system prompt (agent knows about Almaty event sites)
+- Process user queries and decide when to use web tools
+- Call MCP Playwright tools when event search is needed
+- Return structured response
 
-**Example query:** "Куда можно сходить сегодня?"
+**Example query:** "Куда можно сходить сегодня вечером?"
 
-The agent should generate helpful recommendations.
+The agent should autonomously decide to use Playwright to search relevant sites.
 
 ---
 
@@ -211,10 +257,10 @@ The agent should generate helpful recommendations.
 **Folder:** `mcp_tools/`
 
 **Tasks:**
-- Build Playwright scrapers
-- Open event websites
-- Extract event information
-- Return structured JSON
+- Set up MCP Playwright server
+- Build scrapers for each event site
+- Extract event title, time, location, URL
+- Return structured JSON to agent
 
 **Example output:**
 ```json
@@ -222,7 +268,8 @@ The agent should generate helpful recommendations.
   {
     "title": "Standup Show",
     "time": "19:00",
-    "location": "Almaty Arena"
+    "location": "Almaty Arena",
+    "url": "https://sxodim.com/almaty/..."
   }
 ]
 ```
@@ -231,45 +278,62 @@ The agent should generate helpful recommendations.
 
 ## 🔄 Development Workflow
 
-Each team member should work in their own branch.
+Each team member works in their own branch.
 
-**Create branch:**
 ```bash
-git checkout -b feature/my-module
-```
+# Create your branch
+git checkout -b feature/your-module
 
-**Commit changes:**
-```bash
+# Commit your work
 git add .
-git commit -m "implement feature"
+git commit -m "feat: implement ASR module"
+
+# Push and open a Pull Request
+git push origin feature/your-module
 ```
 
-**Push changes:**
-```bash
-git push origin feature/my-module
-```
-
-Then open a **Pull Request**.
+Then open a Pull Request on GitHub for review.
 
 ---
 
 ## 🎯 Definition of Done
 
-The project is complete when:
-
-- ✔ User can speak to the assistant
-- ✔ Speech converts to text
-- ✔ AI agent understands request
-- ✔ Agent searches event websites
-- ✔ Response generated
-- ✔ Response returned as voice
-- ✔ UI displays conversation
+| Criterion | Description |
+|-----------|-------------|
+| ✅ End-to-end flow | User speaks → gets voice response |
+| ✅ MCP Playwright | Agent searches real event sites |
+| ✅ Audio quality | ASR transcribes correctly, TTS sounds natural |
+| ✅ Code structure | Backend/Frontend separated, API is clean |
+| ✅ Team Git usage | Branches, commits, and PRs from all members |
 
 ---
 
-## 🚀 Final Demo
+## 🌟 Bonus Tasks (Advanced)
+
+### 1. Real-time ASR via WebSocket
+
+Run `faster-whisper-small` locally and stream audio chunks from frontend to backend via **WebSocket**. Show transcription on screen while the user is still speaking.
+
+### 2. Streaming TTS
+
+Use **ElevenLabs Streaming API** (or XTTS-v2 / Fish Speech stream) so the assistant starts playing audio before the full response is generated — dramatically reduces perceived latency.
+
+```python
+# ElevenLabs streaming example
+audio_stream = client.text_to_speech.convert_as_stream(
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    text="Сегодня есть стендап в 19:00...",
+    model_id="eleven_multilingual_v2",
+)
+```
+
+---
+
+## 🚀 Final Demo Flow
 
 1. User opens the website
-2. Clicks the microphone
-3. User says: *"Куда можно сходить сегодня вечером?"*
-4. Assistant responds with voice: *"Сегодня есть стендап в 19:00 и концерт в 20:00."*
+2. Clicks the microphone button
+3. Says: *"Куда можно сходить сегодня вечером в Алматы?"*
+4. System transcribes speech → sends to agent → agent searches sxodim.com
+5. Agent responds: *"Сегодня есть стендап в 19:00 и джазовый концерт в 20:00."*
+6. Response plays as voice, text shown in chat UI
