@@ -43,19 +43,16 @@ def _build_executor() -> AgentExecutor:
     return AgentExecutor(agent=agent, tools=tools, verbose=False, max_iterations=5)
 
 
-def _extract_sources(intermediate_steps: list) -> list[dict]:
-    """Pull event sources from tool call results."""
+def _extract_sources(intermediate_steps: list) -> list:
+    """Pull event sources from search_events_tool results."""
     sources = []
     for action, observation in intermediate_steps:
-        if action.tool in ("search_events", "get_event_details"):
+        if action.tool == "search_events_tool":
             try:
                 data = json.loads(observation)
-                if isinstance(data, list):
-                    for item in data:
-                        if "url" in item and "title" in item:
-                            sources.append({"title": item["title"], "url": item["url"]})
-                elif isinstance(data, dict) and "url" in data:
-                    sources.append({"title": data.get("title", ""), "url": data["url"]})
+                for event in data.get("events", []):
+                    if event.get("url") and event.get("title"):
+                        sources.append({"title": event["title"], "url": event["url"]})
             except (json.JSONDecodeError, TypeError):
                 pass
     return sources

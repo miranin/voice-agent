@@ -35,19 +35,15 @@ MCP_SERVER_URL=http://localhost:8001  # optional, set when mcp_tools server is r
 
 ## MCP Tools I'm Using
 
-Waiting for `mcp_tools/STATUS.md`. Tool interface expected:
+Integrated `mcp_tools.tools.search_events_tool` (Automation Engineer's module).
 
 | Tool | Input | Output |
 |------|-------|--------|
-| `search_events` | `{site, query}` | `[{title, time, location, url}]` |
-| `get_event_details` | `{url}` | `{title, description, time, location, price}` |
-
-When `MCP_SERVER_URL` is set in `.env`, agent automatically switches from stubs to real MCP server.
-The MCP server must expose: `POST /tools/search_events` and `POST /tools/get_event_details`.
+| `search_events_tool` | `city: str = "Almaty"` | `{status, city, total, events: [{title, date, time, location, price, url, source, category}]}` |
 
 ## Current Mode
-- `MCP_SERVER_URL` not set → **stub mode** (returns test data, full pipeline works)
-- `MCP_SERVER_URL` set → **production mode** (calls Automation Engineer's MCP server)
+- `mcp_tools` importable (playwright installed) → **production mode** (real scrapers: sxodim, ticketon, kino)
+- `mcp_tools` not importable → **stub mode** (test data, pipeline still works)
 
 ## Files
 
