@@ -20,8 +20,8 @@ def transcribe(audio_path: str) -> str:
     """
     Transcribe audio file to text.
 
-    Tries faster-whisper first (local, free).
-    Falls back to OpenAI Whisper API if not installed.
+    Uses OpenAI Whisper API first (most accurate for Russian/Kazakh).
+    Falls back to faster-whisper if OpenAI key is missing.
 
     Args:
         audio_path: Path to audio file (WAV, MP3, M4A, etc.)
@@ -29,36 +29,44 @@ def transcribe(audio_path: str) -> str:
     Returns:
         Transcribed text string.
     """
-    try:
-        return _transcribe_faster_whisper(audio_path)
-    except ImportError:
-        logger.warning("faster-whisper not installed, falling back to OpenAI Whisper API")
-        return _transcribe_openai(audio_path)
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            return _transcribe_openai(audio_path)
+        except Exception as e:
+            logger.warning(f"OpenAI Whisper failed: {e}. Falling back to local model.")
+    return _transcribe_faster_whisper(audio_path)
 
+
+_fw_model = None  # cached — loaded once
 
 def _transcribe_faster_whisper(audio_path: str) -> str:
+    global _fw_model
     from faster_whisper import WhisperModel
 
-    model_size = os.getenv("WHISPER_MODEL", "small")
-    logger.info(f"[ASR] Loading faster-whisper model: {model_size}")
+    if _fw_model is None:
+        model_size = os.getenv("WHISPER_MODEL", "small")
+        logger.info(f"[ASR] Loading faster-whisper model: {model_size}")
+        _fw_model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
-    model = WhisperModel(
-        model_size,
-        device="cpu",
-        compute_type="int8",      # memory-efficient
-    )
-
-    segments, info = model.transcribe(
+    segments, info = _fw_model.transcribe(
         audio_path,
-        language="ru",            # Russian — change to None for auto-detect
-        beam_size=1,              # fast (greedy), increase to 5 for better accuracy
-        condition_on_previous_text=False,  # prevents looping on silence
+        language="ru",
+        beam_size=5,                       # was 1 (greedy) — 5 is much more accurate
+        initial_prompt=_INITIAL_PROMPT,
+        condition_on_previous_text=False,
+        vad_filter=True,                   # skip silent parts
     )
 
     text = " ".join(segment.text.strip() for segment in segments)
     logger.info(f"[ASR] Transcribed ({info.language}, {info.duration:.1f}s): {text[:80]}")
     return text.strip()
 
+
+_INITIAL_PROMPT = (
+    "Алматы, афиша, мероприятия, концерт, стендап, выставка, кино, билеты, "
+    "Казахстан, EverJazz, Punch Stand Up Club, sxodim, ticketon, kino.kz, "
+    "куда сходить, что посмотреть, когда, сегодня, завтра, в эту субботу"
+)
 
 def _transcribe_openai(audio_path: str) -> str:
     from openai import OpenAI
@@ -71,6 +79,7 @@ def _transcribe_openai(audio_path: str) -> str:
             model="whisper-1",
             file=f,
             language="ru",
+            prompt=_INITIAL_PROMPT,   # biases Whisper toward Almaty vocabulary
         )
 
     text = result.text.strip()

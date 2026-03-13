@@ -73,8 +73,8 @@ def _synthesize_openai(text: str, output_path: str) -> str:
     logger.info(f"[TTS] OpenAI TTS → text={text[:60]}")
 
     response = client.audio.speech.create(
-        model="tts-1",
-        voice="nova",       # clear, neutral voice
+        model="tts-1-hd",
+        voice="shimmer",    # bright, expressive, anime-like female voice
         input=text,
     )
     response.stream_to_file(output_path)

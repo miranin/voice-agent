@@ -15,8 +15,7 @@ import json
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_agent
 
 from agent.tools import get_tools
 from agent.prompts import SYSTEM_PROMPT
@@ -24,36 +23,32 @@ from agent.prompts import SYSTEM_PROMPT
 load_dotenv()
 
 
-def _build_executor() -> AgentExecutor:
-    llm = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        temperature=0,
-        api_key=os.getenv("OPENAI_API_KEY"),
+def _build_agent():
+    tools = get_tools()
+    return create_agent(
+        model=ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=0,
+            api_key=os.getenv("OPENAI_API_KEY"),
+        ),
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
     )
 
-    tools = get_tools()
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", "{input}"),
-        MessagesPlaceholder("agent_scratchpad"),
-    ])
-
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    return AgentExecutor(agent=agent, tools=tools, verbose=False, max_iterations=5)
-
-
-def _extract_sources(intermediate_steps: list) -> list:
-    """Pull event sources from search_events_tool results."""
+def _extract_sources(messages: list) -> list:
+    """Pull event sources from tool result messages."""
     sources = []
-    for action, observation in intermediate_steps:
-        if action.tool == "search_events_tool":
+    for msg in messages:
+        # Tool messages contain the JSON response from search_events_tool
+        if hasattr(msg, "content") and isinstance(msg.content, str):
             try:
-                data = json.loads(observation)
-                for event in data.get("events", []):
-                    if event.get("url") and event.get("title"):
-                        sources.append({"title": event["title"], "url": event["url"]})
-            except (json.JSONDecodeError, TypeError):
+                data = json.loads(msg.content)
+                if isinstance(data, dict) and "events" in data:
+                    for event in data["events"]:
+                        if event.get("url") and event.get("title"):
+                            sources.append({"title": event["title"], "url": event["url"]})
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
     return sources
 
@@ -71,14 +66,22 @@ def run_agent(user_text: str) -> dict:
             "sources": [{"title": str, "url": str}, ...]
         }
     """
-    executor = _build_executor()
-    result = executor.invoke(
-        {"input": user_text},
-        return_only_outputs=False,
-    )
+    agent = _build_agent()
+    result = agent.invoke({
+        "messages": [{"role": "user", "content": user_text}]
+    })
 
-    response_text = result.get("output", "")
-    sources = _extract_sources(result.get("intermediate_steps", []))
+    messages = result.get("messages", [])
+
+    # Last AI message is the final response
+    response_text = ""
+    for msg in reversed(messages):
+        role = getattr(msg, "type", "") or getattr(msg, "role", "")
+        if role in ("ai", "assistant") and getattr(msg, "content", ""):
+            response_text = msg.content
+            break
+
+    sources = _extract_sources(messages)
 
     return {
         "response_text": response_text,

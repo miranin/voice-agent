@@ -11,6 +11,7 @@ Run:
 
 import os
 import uuid
+import base64
 import logging
 import tempfile
 from pathlib import Path
@@ -74,6 +75,17 @@ def get_agent():
 
 # --- Endpoints -----------------------------------------------------------
 
+def _strip_markdown(text: str) -> str:
+    """Remove markdown so TTS doesn't read ** or [link](url) aloud."""
+    import re
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)          # **bold**
+    text = re.sub(r'\*(.+?)\*', r'\1', text)               # *italic*
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)  # [text](url)
+    text = re.sub(r'#+\s', '', text)                        # ## headings
+    text = re.sub(r'`(.+?)`', r'\1', text)                 # `code`
+    return text.strip()
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "voice-ai-backend"}
@@ -117,19 +129,23 @@ async def voice_query(audio: UploadFile = File(...)):
         sources       = agent_result.get("sources", [])
         logger.info(f"[{request_id}] Response: {response_text[:80]}")
 
-        # 4. TTS — response text → audio file
+        # 4. TTS — response text → audio file (strip markdown first)
+        response_text = _strip_markdown(response_text)
         logger.info(f"[{request_id}] Running TTS...")
         audio_filename = f"{request_id}.mp3"
         audio_path     = str(AUDIO_DIR / audio_filename)
         get_tts()(response_text, audio_path)
 
-        audio_url = f"/audio/{audio_filename}"
-        logger.info(f"[{request_id}] Done. Audio at {audio_url}")
+        # Encode audio as base64 — avoids all CORS/autoplay issues in browser
+        with open(audio_path, "rb") as f:
+            audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        logger.info(f"[{request_id}] Done. Audio encoded as base64.")
 
         return JSONResponse({
             "transcript":    transcript,
             "response_text": response_text,
-            "audio_url":     audio_url,
+            "audio_b64":     audio_b64,
             "sources":       sources,
         })
 
